@@ -1,0 +1,19 @@
+.gradle
+build/
+
+### IntelliJ IDEA ###
+.idea/
+*.iml
+out/
+
+### Eclipse ###
+.classpath
+.project
+.settings
+bin/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
