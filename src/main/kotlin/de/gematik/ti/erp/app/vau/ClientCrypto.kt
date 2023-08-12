@@ -19,14 +19,9 @@
 package de.gematik.ti.erp.app.vau
 
 import de.gematik.ti.erp.app.Requirement
-import okhttp3.Headers
-import okhttp3.HttpUrl
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.Protocol
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import java.security.SecureRandom
@@ -51,13 +46,13 @@ B.3 pass http response to fhir client
 C.1 goto A.1
 */
 
-private val defaultContentType = "application/octet-stream".toMediaTypeOrNull()
+private val defaultContentType: MediaType = "application/octet-stream".toMediaType()
 private const val byteSpace: Byte = 32
 
 /**
  * Trusted execution environment channel specifications according to `gemSpec_Krypt 7`.
  */
-class VauChannelSpec constructor(
+class VauChannelSpec(
     /**
      * Version byte. E.g. `'1'.toByte()`.
      */
@@ -127,7 +122,7 @@ class VauChannelSpec constructor(
 
         cryptoConfig: VauCryptoConfig = defaultCryptoConfig
     ): RawRequestData {
-        val symmetricalKeyHex = decryptionKey.encoded!!.toLowerCaseHex()
+        val symmetricalKeyHex = decryptionKey.encoded.toLowerCaseHex()
         val requestIdHex = requestId.toLowerCaseHex()
         val composedInnerHttp =
             composeInnerHttp(innerHttp, this.version, bearer, requestIdHex, symmetricalKeyHex)

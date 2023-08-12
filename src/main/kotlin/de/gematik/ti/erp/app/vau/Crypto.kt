@@ -51,7 +51,7 @@ internal val defaultCryptoConfig: VauCryptoConfig
 /**
  * Refer to gemSpec_Krypt A_20161.
  */
-class VauEciesSpec constructor(
+class VauEciesSpec(
     val version: Byte,
     val info: ByteArray,
     /**
@@ -78,56 +78,6 @@ class VauEciesSpec constructor(
  * Refer to gemSpec_Krypt `A_20161-01`
  */
 object Ecies {
-    internal fun generateCipher(
-        ivSpec: IvParameterSpec,
-        ourECKeyPair: KeyPair,
-        otherECPublicKey: ECPublicKey,
-        spec: VauEciesSpec,
-        mode: Int,
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
-    ) =
-        Cipher.getInstance("AES/GCM/NoPadding", cryptoConfig.provider).apply {
-            val secret = KeyAgreement.getInstance("ECDH", cryptoConfig.provider).apply {
-                init(ourECKeyPair.private, cryptoConfig.random)
-                doPhase(otherECPublicKey, true)
-            }.generateSecret()
-
-            val aesKey = ByteArray(spec.aesSize).apply {
-                HKDFBytesGenerator(SHA256Digest()).apply {
-                    init(HKDFParameters(secret, null, spec.info))
-                }.generateBytes(this, 0, this.size)
-            }
-
-            init(mode, SecretKeySpec(aesKey, "AES"), ivSpec)
-        }
-
-    internal fun encrypt(
-        spec: VauEciesSpec,
-        plaintext: ByteArray,
-        ivSpec: IvParameterSpec,
-        ourPublicKey: ECPublicKey,
-        cipher: Cipher
-    ): ByteArray {
-        val ciphertext = cipher.doFinal(plaintext)
-
-        require(ciphertext.size - 16 == plaintext.size) { "ECIES encryption failed!" }
-
-        val x = ourPublicKey.w.affineX.toByteArray()
-        val y = ourPublicKey.w.affineY.toByteArray()
-
-        return ByteArray(1 + 32 * 2 + spec.ivSize + ciphertext.size).apply {
-            // due two's-complement representation, x & y may contain leading zeros resulting
-            // in a byte array of 33 elements;
-            // therefore we copy them in reverse order to ignore the first byte in this case
-            y.copyInto(this, 1 + 32 + 32 - y.size)
-            x.copyInto(this, 1 + 32 - x.size)
-            set(0, spec.version)
-
-            ivSpec.iv.copyInto(this, 1 + 32 + 32)
-            ciphertext.copyInto(this, 1 + 32 + 32 + spec.ivSize)
-        }
-    }
-
     fun encrypt(
         otherECPublicKey: ECPublicKey,
         spec: VauEciesSpec,
@@ -148,6 +98,33 @@ object Ecies {
         return encrypt(spec, plaintext, ivSpec, eKp.public as ECPublicKey, cipher)
     }
 
+    internal fun encrypt(
+        spec: VauEciesSpec,
+        plaintext: ByteArray,
+        ivSpec: IvParameterSpec,
+        ourPublicKey: ECPublicKey,
+        cipher: Cipher
+    ): ByteArray {
+        val ciphertext = cipher.doFinal(plaintext)
+
+        require(ciphertext.size - 16 == plaintext.size) { "ECIES encryption failed!" }
+
+        val x = ourPublicKey.w.affineX.toByteArray()
+        val y = ourPublicKey.w.affineY.toByteArray()
+
+        return ByteArray(1 + 32 * 2 + spec.ivSize + ciphertext.size).apply {
+            // due to two's-complement representation, x & y may contain leading zeros resulting
+            // in a byte array of 33 elements;
+            // therefore we copy them in reverse order to ignore the first byte in this case
+            y.copyInto(this, 1 + 32 + 32 - y.size)
+            x.copyInto(this, 1 + 32 - x.size)
+            set(0, spec.version)
+
+            ivSpec.iv.copyInto(this, 1 + 32 + 32)
+            ciphertext.copyInto(this, 1 + 32 + 32 + spec.ivSize)
+        }
+    }
+
     fun decrypt(
         ourECKeyPair: KeyPair,
         spec: VauEciesSpec,
@@ -166,8 +143,7 @@ object Ecies {
                 curveSpec.curve.createPoint(x, y),
                 curveSpec
             ).let { pubKeySpec ->
-                KeyFactory.getInstance("EC", cryptoConfig.provider)
-                    .generatePublic(pubKeySpec) as ECPublicKey
+                KeyFactory.getInstance("EC", cryptoConfig.provider).generatePublic(pubKeySpec) as ECPublicKey
             }
 
             val ivSpec = IvParameterSpec(it, 1 + 32 * 2, spec.ivSize)
@@ -175,9 +151,32 @@ object Ecies {
             generateCipher(ivSpec, ourECKeyPair, otherPublicKey, spec, Cipher.DECRYPT_MODE, cryptoConfig)
                 .doFinal(ciphertext, 1 + 32 * 2 + spec.ivSize, it.size - (1 + 32 * 2 + spec.ivSize))
         }
+
+    internal fun generateCipher(
+        ivSpec: IvParameterSpec,
+        ourECKeyPair: KeyPair,
+        otherECPublicKey: ECPublicKey,
+        spec: VauEciesSpec,
+        mode: Int,
+        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+    ): Cipher =
+        Cipher.getInstance("AES/GCM/NoPadding", cryptoConfig.provider).apply {
+            val secret = KeyAgreement.getInstance("ECDH", cryptoConfig.provider).apply {
+                init(ourECKeyPair.private, cryptoConfig.random)
+                doPhase(otherECPublicKey, true)
+            }.generateSecret()
+
+            val aesKey = ByteArray(spec.aesSize).apply {
+                HKDFBytesGenerator(SHA256Digest()).apply {
+                    init(HKDFParameters(secret, null, spec.info))
+                }.generateBytes(this, 0, this.size)
+            }
+
+            init(mode, SecretKeySpec(aesKey, "AES"), ivSpec)
+        }
 }
 
-class VauAesGcmSpec constructor(
+class VauAesGcmSpec(
     /**
      * IV size in bytes.
      */

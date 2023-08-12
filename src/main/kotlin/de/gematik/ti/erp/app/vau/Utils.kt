@@ -20,7 +20,7 @@ package de.gematik.ti.erp.app.vau
 
 // hex
 
-private fun hexMap(index: Int) =
+private fun hexMap(index: Int): Byte =
     when (index) {
         in 0..9 -> (index + 48).toByte()
         in 10..15 -> (index + 97 - 10).toByte()
@@ -28,7 +28,7 @@ private fun hexMap(index: Int) =
     }
 
 /**
- * Converts the bytes into an hex representation as bytes.
+ * Converts the bytes into a hex representation as bytes.
  *
  * E.g. `byteArrayOf(0, 5, 2).toLowerCaseHex()` result in `[48, 48, 48, 53, 48, 50]`.
  */
