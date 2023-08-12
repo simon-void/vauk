@@ -8,7 +8,7 @@ Extract the code capable of de-/encoding Strings (or more precisely ByteArrays) 
 
 #### Status
 
-check out the implementation of [VauService](https://github.com/simon-void/vauk/blob/master/src/main/kotlin/VauService.kt).
+check out the implementation of [VauEncryptionService](https://github.com/simon-void/vauk/blob/master/src/main/kotlin/VauEncryptionService.kt).
 
 ### History
 
