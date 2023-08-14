@@ -10,7 +10,12 @@ Extract the code capable of de-/encoding Strings (or more precisely ByteArrays) 
 
 check out the implementation of [VauEncryptionService](https://github.com/simon-void/vauk/blob/master/src/main/kotlin/VauEncryptionService.kt).
 
-## In case of forking
+### Information on VAU protocol
+
+- [VAU-Transport](https://github.com/gematik/api-erp/blob/master/docs/authentisieren.adoc#verschl%C3%BCsselter-transportkanal-zur-vertrauensw%C3%BCrdigen-ausf%C3%BChrungsumgebung-vau-transport)
+- [Die statuslose Variante des VAU-Protokolls für das E-Rezept](https://bitbucket.org/andreas_hallof/vau-protokoll/src/master/erp/)
+
+### In case of forking
 
 If you fork the projekt to work on a different JDK notice that you'll probably have to
 adjust the BouncyCastle dependency. There are [different versions](https://mvnrepository.com/search?q=org.bouncycastle%3Abcprov-jdk15on&ref=opensearch)
