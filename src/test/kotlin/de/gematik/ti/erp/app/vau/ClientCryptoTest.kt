@@ -19,7 +19,9 @@
 package de.gematik.ti.erp.app.vau
 
 import io.mockk.mockk
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Protocol
 import okhttp3.Request
@@ -141,7 +143,7 @@ class ClientCryptoTest {
             .get()
             .header("Abc", "123")
             .build()
-            .toRawVauInnerHttpRequest("http://abc.def/".toHttpUrl()).decodeToString()
+            .toRawVauInnerHttpRequest().decodeToString()
 
         assertEquals(expectedHttp, r)
     }
@@ -152,7 +154,7 @@ class ClientCryptoTest {
             .url("http://abc.def/Task/hello")
             .post("Something".toRequestBody("application/json".toMediaType()))
             .build()
-            .toRawVauInnerHttpRequest("http://abc.def/".toHttpUrl()).decodeToString().let {
+            .toRawVauInnerHttpRequest().decodeToString().let {
                 it.split("\r\n").let {
                     assertEquals(5, it.size)
                     assertArrayEquals(
@@ -175,7 +177,7 @@ class ClientCryptoTest {
             .url("http://abc.def/123/Task/hello")
             .post("Something".toRequestBody("application/json".toMediaType()))
             .build()
-            .toRawVauInnerHttpRequest("http://abc.def/123/".toHttpUrl()).decodeToString().let {
+            .toRawVauInnerHttpRequest().decodeToString().let {
                 it.split("\r\n").let {
                     assertEquals(5, it.size)
                     assertArrayEquals(
@@ -199,7 +201,7 @@ class ClientCryptoTest {
                 .url("http://abc.def/123/Task/hello")
                 .post("Something".toRequestBody("application/json".toMediaType()))
                 .build()
-                .toRawVauInnerHttpRequest("http://abc.def/123".toHttpUrl())
+                .toRawVauInnerHttpRequest()
         }
     }
 
@@ -285,9 +287,8 @@ class ClientCryptoTest {
 
         val (outerRequest, rawInnerRequest) = VauChannelSpec.V1.encryptHttpRequest(
             innerHttpRequest,
-            userpseudonym = "0",
+            userPseudonym = "0",
             publicKey = vauKeyPair.public as ECPublicKey,
-            baseUrl = "https://vau.xyz/".toHttpUrl(),
             cryptoConfig = TestCryptoConfig
         )
 
@@ -371,5 +372,24 @@ class ClientCryptoTest {
                 assertEquals("application/fhir+json;charset=utf-8", it.first.body!!.contentType().toString())
                 assertEquals("Some Content", it.first.body!!.string())
             }
+    }
+
+    @Test
+    fun `authentication bearer extraction from http request`() {
+        val bearer = "0123456789"
+        val r = Request.Builder()
+            .url("http://abc.def/Task")
+            .get()
+            .header("Authorization", "Bearer  $bearer ")
+            .build()
+
+        assertEquals(bearer, r.authBearer)
+    }
+
+    @Test
+    fun `extracting the base url from http request`() {
+        val url = "http://admin:admin@abc.def:8060/Task/25/?i=2".toHttpUrlOrNull()
+
+        assertEquals("http://admin:admin@abc.def:8060/", url?.baseUrl.toString())
     }
 }

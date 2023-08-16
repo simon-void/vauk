@@ -39,14 +39,16 @@ import javax.crypto.spec.SecretKeySpec
 
 /**
  * Configuration enabling a custom security provider and secure random.
+ * e.g.:
+ * object: VauCryptoConfig {
+ *     override val provider = BouncyCastleProvider(),
+ *     override val random = SecureRandom(),
+ * }
  */
 interface VauCryptoConfig {
     val provider: Provider
     val random: SecureRandom
 }
-
-internal val defaultCryptoConfig: VauCryptoConfig
-    get() = error("default crypto config should not be used")
 
 /**
  * Refer to gemSpec_Krypt A_20161.
@@ -57,19 +59,19 @@ class VauEciesSpec(
     /**
      * IV size in bytes.
      */
-    val ivSize: Int,
+    val ivSize: BinarySize,
     /**
      * Symmetrical key size in bytes.
      */
-    val aesSize: Int
+    val aesSize: BinarySize
 ) {
     companion object {
         @JvmField
         val V1 = VauEciesSpec(
             version = 0x01.toByte(),
             info = "ecies-vau-transport".toByteArray(),
-            ivSize = 12,
-            aesSize = 16
+            ivSize = BinarySize(nrOfBytes = 12),
+            aesSize = BinarySize(nrOfBytes = 16),
         )
     }
 }
@@ -82,9 +84,9 @@ object Ecies {
         otherECPublicKey: ECPublicKey,
         spec: VauEciesSpec,
         plaintext: ByteArray,
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): ByteArray {
-        val ivBytes = ByteArray(spec.ivSize).apply {
+        val ivBytes = ByteArray(spec.ivSize.nrOfBytes).apply {
             cryptoConfig.random.nextBytes(this)
         }
         val ivSpec = IvParameterSpec(ivBytes)
@@ -112,7 +114,7 @@ object Ecies {
         val x = ourPublicKey.w.affineX.toByteArray()
         val y = ourPublicKey.w.affineY.toByteArray()
 
-        return ByteArray(1 + 32 * 2 + spec.ivSize + ciphertext.size).apply {
+        return ByteArray(1 + 32 * 2 + spec.ivSize.nrOfBytes + ciphertext.size).apply {
             // due to two's-complement representation, x & y may contain leading zeros resulting
             // in a byte array of 33 elements;
             // therefore we copy them in reverse order to ignore the first byte in this case
@@ -121,7 +123,7 @@ object Ecies {
             set(0, spec.version)
 
             ivSpec.iv.copyInto(this, 1 + 32 + 32)
-            ciphertext.copyInto(this, 1 + 32 + 32 + spec.ivSize)
+            ciphertext.copyInto(this, 1 + 32 + 32 + spec.ivSize.nrOfBytes)
         }
     }
 
@@ -129,11 +131,11 @@ object Ecies {
         ourECKeyPair: KeyPair,
         spec: VauEciesSpec,
         ciphertext: ByteArray,
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): ByteArray =
         ciphertext.let {
             require(it[0] == spec.version) { "Invalid version byte: ${it[0]} != ${spec.version}" }
-            require(it.size > (1 + 32 * 2 + spec.ivSize)) { "Ciphertext too small!" }
+            require(it.size > (1 + 32 * 2 + spec.ivSize.nrOfBytes)) { "Ciphertext too small!" }
 
             val x = BigInteger(1, it.copyOfRange(1, 1 + 32))
             val y = BigInteger(1, it.copyOfRange(1 + 32, 1 + 32 * 2))
@@ -146,10 +148,10 @@ object Ecies {
                 KeyFactory.getInstance("EC", cryptoConfig.provider).generatePublic(pubKeySpec) as ECPublicKey
             }
 
-            val ivSpec = IvParameterSpec(it, 1 + 32 * 2, spec.ivSize)
+            val ivSpec = IvParameterSpec(it, 1 + 32 * 2, spec.ivSize.nrOfBytes)
 
             generateCipher(ivSpec, ourECKeyPair, otherPublicKey, spec, Cipher.DECRYPT_MODE, cryptoConfig)
-                .doFinal(ciphertext, 1 + 32 * 2 + spec.ivSize, it.size - (1 + 32 * 2 + spec.ivSize))
+                .doFinal(ciphertext, 1 + 32 * 2 + spec.ivSize.nrOfBytes, it.size - (1 + 32 * 2 + spec.ivSize.nrOfBytes))
         }
 
     internal fun generateCipher(
@@ -158,7 +160,7 @@ object Ecies {
         otherECPublicKey: ECPublicKey,
         spec: VauEciesSpec,
         mode: Int,
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): Cipher =
         Cipher.getInstance("AES/GCM/NoPadding", cryptoConfig.provider).apply {
             val secret = KeyAgreement.getInstance("ECDH", cryptoConfig.provider).apply {
@@ -166,7 +168,7 @@ object Ecies {
                 doPhase(otherECPublicKey, true)
             }.generateSecret()
 
-            val aesKey = ByteArray(spec.aesSize).apply {
+            val aesKey = ByteArray(spec.aesSize.nrOfBytes).apply {
                 HKDFBytesGenerator(SHA256Digest()).apply {
                     init(HKDFParameters(secret, null, spec.info))
                 }.generateBytes(this, 0, this.size)
@@ -180,17 +182,17 @@ class VauAesGcmSpec(
     /**
      * IV size in bytes.
      */
-    val ivSize: Int,
+    val ivSize: BinarySize,
     /**
      * Tag length in bytes.
      */
-    val tagSize: Int
+    val tagSize: BinarySize,
 ) {
     companion object {
         @JvmField
         val V1 = VauAesGcmSpec(
-            ivSize = 12,
-            tagSize = 16
+            ivSize = BinarySize(nrOfBytes = 12),
+            tagSize = BinarySize(nrOfBytes = 16),
         )
     }
 }
@@ -200,14 +202,14 @@ object AesGcm {
         aesKey: SecretKey,
         spec: VauAesGcmSpec,
         cleartext: ByteArray,
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): ByteArray {
-        val ivBytes = ByteArray(spec.ivSize).apply {
+        val ivBytes = ByteArray(spec.ivSize.nrOfBytes).apply {
             cryptoConfig.random.nextBytes(this)
         }
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding", cryptoConfig.provider).apply {
-            init(Cipher.ENCRYPT_MODE, aesKey, GCMParameterSpec(spec.tagSize * 8, ivBytes))
+            init(Cipher.ENCRYPT_MODE, aesKey, GCMParameterSpec(spec.tagSize.nrOfBits, ivBytes))
         }.doFinal(cleartext)
 
         return ivBytes + cipher
@@ -217,13 +219,13 @@ object AesGcm {
         aesKey: SecretKey,
         spec: VauAesGcmSpec,
         ciphertext: ByteArray,
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): ByteArray =
         Cipher.getInstance("AES/GCM/NoPadding", cryptoConfig.provider).apply {
             init(
                 Cipher.DECRYPT_MODE,
                 aesKey,
-                GCMParameterSpec(spec.tagSize * 8, ciphertext, 0, spec.ivSize)
+                GCMParameterSpec(spec.tagSize.nrOfBits, ciphertext, 0, spec.ivSize.nrOfBytes)
             )
-        }.doFinal(ciphertext, spec.ivSize, ciphertext.size - spec.ivSize)
+        }.doFinal(ciphertext, spec.ivSize.nrOfBytes, ciphertext.size - spec.ivSize.nrOfBytes)
 }

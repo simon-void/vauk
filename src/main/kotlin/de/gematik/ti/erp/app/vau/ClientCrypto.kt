@@ -24,7 +24,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
-import java.security.SecureRandom
 import java.security.interfaces.ECPublicKey
 import java.util.Locale
 import javax.crypto.KeyGenerator
@@ -47,7 +46,8 @@ C.1 goto A.1
 */
 
 private val defaultContentType: MediaType = "application/octet-stream".toMediaType()
-private const val byteSpace: Byte = 32
+
+
 
 /**
  * Trusted execution environment channel specifications according to `gemSpec_Krypt 7`.
@@ -60,11 +60,11 @@ class VauChannelSpec(
     /**
      * Request id size in bytes.
      */
-    val requestIdSize: Int,
+    val requestIdSize: BinarySize,
     /**
      * Symmetrical decryption key size in bytes.
      */
-    val decryptionKeySize: Int,
+    val decryptionKeySize: BinarySize,
 
     val specEcies: VauEciesSpec,
     val specAesGcm: VauAesGcmSpec
@@ -80,6 +80,54 @@ class VauChannelSpec(
     )
 
     /**
+     * Encrypts an okhttp [Request] and wraps it within a new outer request.
+     * The outer request points to the location `$baseUrl/$userpseudonym`.
+     * The bearer token is extracted from the authorization header of the [innerRequest]
+     * and is required to be prefixed with `Bearer`; i.e. `Authorization = Bearer ab12cd34d42fs324`.
+     *
+     * @return the encrypted request and [RawRequestData] of the actual encryption process.
+     */
+    @Requirement(
+        "A_20161-01#5",
+        "A_21325",
+        sourceSpecification = "gemSpec_eRp_FdV",
+        rationale = "Generate AES key, assemble and encrypt VAU request."
+    )
+    fun encryptHttpRequest(
+        innerRequest: Request,
+        userPseudonym: String,
+        publicKey: ECPublicKey,
+
+        cryptoConfig: VauCryptoConfig,
+    ): Pair<Request, RawRequestData> {
+        val payload = innerRequest.toRawVauInnerHttpRequest()
+
+        val encryptedRawRequest = encryptRawVauRequest(
+            innerHttp = payload,
+            bearer = innerRequest.authBearer.encodeToByteArray(),
+            publicKey = publicKey,
+            cryptoConfig = cryptoConfig
+        )
+
+        val body = encryptedRawRequest.payload.toRequestBody(defaultContentType)
+        val outerUrl = run {
+            val outerPath = "VAU/$userPseudonym"
+            innerRequest.url.baseUrl.let { baseUrl ->
+                baseUrl.resolve(outerPath) ?: error("Invalid outer url: $baseUrl$outerPath")
+            }
+        }
+
+        return Pair(
+            Request.Builder()
+                .url(outerUrl)
+                .post(body)
+                .header("Content-Length", body.contentLength().toString())
+                .build(),
+            encryptedRawRequest
+        )
+    }
+
+    /**
      * Encrypts a byte array as the inner request.
      */
     fun encryptRawVauRequest(
@@ -88,14 +136,14 @@ class VauChannelSpec(
         bearer: ByteArray,
         publicKey: ECPublicKey,
 
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): RawRequestData {
         val decryptionKey = KeyGenerator.getInstance("AES", cryptoConfig.provider).apply {
-            init(this@VauChannelSpec.decryptionKeySize * 8)
+            init(this@VauChannelSpec.decryptionKeySize.nrOfBits)
         }.generateKey()
 
-        val requestId = ByteArray(this.requestIdSize).apply {
-            SecureRandom().nextBytes(this)
+        val requestId = ByteArray(this.requestIdSize.nrOfBytes).apply {
+            cryptoConfig.random.nextBytes(this)
         }
 
         return encryptRawVauRequest(
@@ -120,12 +168,11 @@ class VauChannelSpec(
         requestId: ByteArray,
         decryptionKey: SecretKey,
 
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): RawRequestData {
         val symmetricalKeyHex = decryptionKey.encoded.toLowerCaseHex()
         val requestIdHex = requestId.toLowerCaseHex()
-        val composedInnerHttp =
-            composeInnerHttp(innerHttp, this.version, bearer, requestIdHex, symmetricalKeyHex)
+        val composedInnerHttp = composeInnerHttp(innerHttp, this.version, bearer, requestIdHex, symmetricalKeyHex)
 
         return RawRequestData(
             requestIdHex = requestIdHex,
@@ -140,84 +187,29 @@ class VauChannelSpec(
         bearer: ByteArray,
         requestId: ByteArray,
         symmetricalKey: ByteArray
-    ) =
-        ByteArray(5 + bearer.size + requestId.size + symmetricalKey.size + innerHttp.size).apply {
-            this[0] = version
-            this[1] = byteSpace
-            bearer.copyInto(this, 2)
-            this[2 + bearer.size] = byteSpace
-            requestId.copyInto(this, 3 + bearer.size)
-            this[3 + bearer.size + requestId.size] = byteSpace
-            symmetricalKey.copyInto(this, 4 + bearer.size + requestId.size)
-            this[4 + bearer.size + requestId.size + symmetricalKey.size] = byteSpace
-            innerHttp.copyInto(this, 5 + bearer.size + requestId.size + symmetricalKey.size)
-        }
+    ): ByteArray {
+        val space: Byte = 32 // ascii value of space
+        val bearerAndRequestIdSizeSum: Int = bearer.size + requestId.size
+        val bearerAndRequestIdAndSymKeySizeSum: Int = bearerAndRequestIdSizeSum + symmetricalKey.size
 
-    /**
-     * Decrypt raw response data.
-     */
-    fun decryptRawVauResponse(
-        encryptedInnerHttp: ByteArray,
-        decryptionKey: SecretKey,
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
-    ): ByteArray =
-        AesGcm.decrypt(decryptionKey, specAesGcm, encryptedInnerHttp, cryptoConfig)
+        return ByteArray(5 + bearer.size + requestId.size + symmetricalKey.size + innerHttp.size).apply {
+            this[0] = version
+            this[1] = space
+            bearer.copyInto(this, 2)
+            this[2 + bearer.size] = space
+            requestId.copyInto(this, 3 + bearer.size)
+            this[3 + bearerAndRequestIdSizeSum] = space
+            symmetricalKey.copyInto(this, 4 + bearerAndRequestIdSizeSum)
+            this[4 + bearerAndRequestIdAndSymKeySizeSum] = space
+            innerHttp.copyInto(this, 5 + bearerAndRequestIdAndSymKeySizeSum)
+        }
+    }
 
     /**
      * Returns the minimum response size in bytes assuming the `request id` to be hex encoded.
      * This includes the space separating the `header` from the actual encrypted body.
      */
-    val minResponseSize: Int = 3 + requestIdSize * 2
-
-    /**
-     * Encrypts an okhttp [Request] and wraps it within a new outer request.
-     * The outer request points to the location `$baseUrl/$userpseudonym`.
-     * The bearer token is extracted from the authorization header of the [innerRequest]
-     * and is required to be prefixed with `Bearer`; i.e. `Authorization = Bearer ab12cd34d42fs324`.
-     *
-     * @return the encrypted request and [RawRequestData] of the actual encryption process.
-     */
-    @Requirement(
-        "A_20161-01#5",
-        "A_21325",
-        sourceSpecification = "gemSpec_eRp_FdV",
-        rationale = "Generate AES key, assemble and encrypt VAU request."
-    )
-    fun encryptHttpRequest(
-        innerRequest: Request,
-        userpseudonym: String,
-        publicKey: ECPublicKey,
-        baseUrl: HttpUrl,
-
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
-    ): Pair<Request, RawRequestData> {
-        val bearer = requireNotNull(
-            innerRequest.header("Authorization")
-                ?.takeIf { it.startsWith("Bearer") }
-        )
-            .removePrefix("Bearer")
-            .trim()
-
-        val payload = innerRequest.toRawVauInnerHttpRequest(baseUrl)
-
-        val encryptedRawRequest = encryptRawVauRequest(
-            innerHttp = payload,
-            bearer = bearer.encodeToByteArray(),
-            publicKey = publicKey,
-            cryptoConfig = cryptoConfig
-        )
-
-        val body = encryptedRawRequest.payload.toRequestBody(defaultContentType)
-
-        return Pair(
-            Request.Builder()
-                .url(requireNotNull(baseUrl.resolve("VAU/$userpseudonym")))
-                .post(body)
-                .header("Content-Length", body.contentLength().toString())
-                .build(),
-            encryptedRawRequest
-        )
-    }
+    val minResponseSize: Int = 3 + requestIdSize.nrOfBytes * 2
 
     /**
      * Decrypts a response from the VAU containing the encrypted inner response as payload.
@@ -240,13 +232,13 @@ class VauChannelSpec(
 
         rawRequestData: RawRequestData,
 
-        cryptoConfig: VauCryptoConfig = defaultCryptoConfig
+        cryptoConfig: VauCryptoConfig,
     ): Pair<Response, String?> {
         require(outerResponse.isSuccessful)
         val body = requireNotNull(outerResponse.body) { "VAU response body empty" }
         require(body.contentType() == defaultContentType) { "VAU response body has wrong content type" }
 
-        val userpseudonym = outerResponse.header("Userpseudonym")
+        val userPseudonym = outerResponse.header("Userpseudonym")
 
         val p = decryptRawVauResponse(
             encryptedInnerHttp = body.bytes(),
@@ -264,17 +256,27 @@ class VauChannelSpec(
 
         val innerResponse = p.copyOfRange(this.minResponseSize, p.size)
 
-        return Pair(innerResponse.toVauInnerHttpResponse(previousInnerRequest), userpseudonym)
+        return innerResponse.toVauInnerHttpResponse(previousInnerRequest) to userPseudonym
     }
+
+    /**
+     * Decrypt raw response data.
+     */
+    fun decryptRawVauResponse(
+        encryptedInnerHttp: ByteArray,
+        decryptionKey: SecretKey,
+        cryptoConfig: VauCryptoConfig,
+    ): ByteArray =
+        AesGcm.decrypt(decryptionKey, specAesGcm, encryptedInnerHttp, cryptoConfig)
 
     companion object {
         @JvmField
         val V1 = VauChannelSpec(
             version = '1'.code.toByte(),
-            requestIdSize = 16,
-            decryptionKeySize = 16,
+            requestIdSize = BinarySize(nrOfBytes = 16),
+            decryptionKeySize = BinarySize(nrOfBytes = 16),
             specEcies = VauEciesSpec.V1,
-            specAesGcm = VauAesGcmSpec.V1
+            specAesGcm = VauAesGcmSpec.V1,
         )
     }
 }
@@ -293,37 +295,45 @@ class VauChannelSpec(
  *
  * Throws an exception if [baseUrl] doesn't contain a trailing `/` or [this] doesn't contain the [baseUrl].
  */
-fun Request.toRawVauInnerHttpRequest(
-    baseUrl: HttpUrl,
+internal fun Request.toRawVauInnerHttpRequest(
     protocol: Protocol = Protocol.HTTP_1_1
-): ByteArray =
-    this.let { req ->
-        require(baseUrl.querySize == 0)
-        require(baseUrl.fragment == null)
-        require(baseUrl.pathSegments.last() == "") // trailing `/`
+): ByteArray = this.let { req ->
+    fun Buffer.writeUtf8ln(s: String = ""): Buffer = writeUtf8("$s\r\n")
+    fun HttpUrl.removePrefix(prefixUrl: HttpUrl): String = this.toString().removePrefix(prefixUrl.toString())
+    
+    val urlWithoutBase = "/" + req.url.removePrefix(req.url.baseUrl)
 
-        val urlEncoded = req.url.toString()
-        val baseUrlEncoded = baseUrl.toString()
-        require(urlEncoded.startsWith(baseUrlEncoded))
+    Buffer().apply {
+        // request line
+        writeUtf8ln("${req.method} $urlWithoutBase ${protocol.toString().uppercase(Locale.getDefault())}")
+        // host
+        writeUtf8ln("Host: ${url.host}")
+        // other headers
+        req.headers.forEach { h ->
+            writeUtf8ln("${h.first}: ${h.second}")
+        }
+        writeUtf8ln("Content-Length: ${req.body?.contentLength() ?: 0}")
+        // body separation
+        writeUtf8ln()
+        // body if present
+        req.body?.writeTo(this)
+    }.readByteArray()
+}
 
-        val urlWithoutBase = "/" + urlEncoded.removePrefix(baseUrlEncoded)
+internal val Request.authBearer: String get() =
+    this.header("Authorization")?.takeIf { it.startsWith("Bearer ") }?.substring(7)?.trim()
+        ?: error("No bearer token found")
 
-        Buffer().apply {
-            // request line
-            writeUtf8("${req.method} $urlWithoutBase ${protocol.toString().uppercase(Locale.getDefault())}\r\n")
-            // host
-            writeUtf8("Host: ${url.host}\r\n")
-            // other headers
-            req.headers.forEach { h ->
-                writeUtf8("${h.first}: ${h.second}\r\n")
-            }
-            writeUtf8("Content-Length: ${req.body?.contentLength() ?: 0 }\r\n")
-            // body separation
-            writeUtf8("\r\n")
-            // body if present
-            req.body?.writeTo(this)
-        }.readByteArray()
-    }
+internal val HttpUrl.baseUrl: HttpUrl get() {
+    val url = this
+    return HttpUrl.Builder().apply {
+        scheme(url.scheme)
+        host(url.host)
+        port(url.port)
+        username(url.username)
+        password(url.password)
+    }.build()
+}
 
 private fun Response.Builder.parseResponseLine(l: String): Response.Builder =
     l.split(" ", limit = 3).let {

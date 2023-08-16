@@ -18,6 +18,18 @@
 
 package de.gematik.ti.erp.app.vau
 
+
+@JvmInline
+value class BinarySize(val nrOfBytes: Int) {
+    init {
+        // 268435455 = Int.MAX_VALUE / 8
+        // it's taken as upper bound so that nrOfBits doesn't overflow
+        require(nrOfBytes in 1..268435455) { "nrOfBytes must lie within 1..268435455 but was: $nrOfBytes" }
+    }
+
+    val nrOfBits: Int get() = nrOfBytes shl 3 // x shl 3 == x * 8
+}
+
 // hex
 
 private fun hexMap(index: Int): Byte =
