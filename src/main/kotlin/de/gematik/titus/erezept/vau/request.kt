@@ -2,6 +2,7 @@ package de.gematik.titus.erezept.vau
 
 import kotlin.collections.component1
 import kotlin.collections.component2
+import kotlin.collections.toList
 import kotlin.text.Charsets.UTF_8
 
 /**
@@ -159,33 +160,33 @@ value class L3VauReqEnvelopeAkaEncryptedL2(val bytes: ByteArray) {
 }
 
 class L4VauReqEnvelopeAkaOuterVau(
-    val version: String,
+    version: L4Version,
     val xCoordinate: XCoordinate,
     val yCoordinate: YCoordinate,
     val iV: InitialisationVector,
     val l3EncryptedL2: L3VauReqEnvelopeAkaEncryptedL2,
 ) {
     init {
-        require(version == "01") { "Invalid version: '$version', supported version: '01'" }
+        version.assertIsValid()
     }
 
-    override fun toString(): String = "L4VauReqEnvelopeAkaOuterVau(version=$version, nrOfEncryptingBytes=${l3EncryptedL2.bytes.size})"
+    override fun toString(): String = "L4VauReqEnvelopeAkaOuterVau(nrOfEncryptingBytes=${l3EncryptedL2.bytes.size})"
 
     companion object {
         @OptIn(ExperimentalUnsignedTypes::class)
         fun from(bytes: ByteArray): L4VauReqEnvelopeAkaOuterVau {
-            val version = bytes.copyOf(2).decodeToString()
+            val version = bytes.copyOf(2)
             val xCoordinate = bytes.copyOfRange(2, 34)
             val yCoordinate = bytes.copyOfRange(34, 66)
             val iV = bytes.copyOfRange(66, 78)
-            val l3_encryptedL2 = L3VauReqEnvelopeAkaEncryptedL2(bytes.copyOfRange(78, bytes.size))
+            val l3EncryptedL2 = L3VauReqEnvelopeAkaEncryptedL2(bytes.copyOfRange(78, bytes.size))
 
             return L4VauReqEnvelopeAkaOuterVau(
-                version = version,
+                version = L4Version(version),
                 xCoordinate = XCoordinate(xCoordinate.toUByteArray()),
                 yCoordinate = YCoordinate(yCoordinate.toUByteArray()),
                 iV = InitialisationVector(iV.toUByteArray()),
-                l3EncryptedL2 = l3_encryptedL2,
+                l3EncryptedL2 = l3EncryptedL2,
             )
         }
     }
@@ -229,6 +230,20 @@ value class AesKey(val value: String) {
 
     @OptIn(ExperimentalStdlibApi::class, ExperimentalUnsignedTypes::class)
     fun toUByteArray(): UByteArray = value.hexToUByteArray()
+}
+
+@JvmInline
+value class L4Version(val value: ByteArray) {
+    fun assertIsValid() {
+        require(value.size == 2) { "Invalid version size: ${value.size}, expected 2" }
+        require(value.map { "$it" }.joinToString(separator = "") == "01") {
+            "Invalid version: ${value.toList()}, expected [0, 1]"
+        }
+    }
+
+    companion object {
+        val V01 = L4Version(byteArrayOf(0, 1))
+    }
 }
 
 @JvmInline
