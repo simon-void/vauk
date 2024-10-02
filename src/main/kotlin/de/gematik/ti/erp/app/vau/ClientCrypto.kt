@@ -18,7 +18,6 @@
 
 package de.gematik.ti.erp.app.vau
 
-import de.gematik.ti.erp.app.Requirement
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody

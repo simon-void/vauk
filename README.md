@@ -1,6 +1,11 @@
 ## vauk
 
-Kotlin/JVM implementation of the VAU encryption protocol
+Goal: Kotlin/JVM implementation of the VAU encryption protocol
+Currently: two partial implementations of the VAU encryption protocol saved from two different projects.
+These two implementations reside in their own packages (de.gematik.ti.erp.app.vau and de.gematik.titus.erezept.vau) and are independent of each other.
+
+- package de.gematik.titus.erezept.vau contains a clean implementation of the VAU data types.
+- package de.gematik.ti.erp.app.vau contains a (complete?) JVM implementation of vau encryption functions (based on BouncyCastle) but not yet based on those clean data types.
 
 ### Aim
 
@@ -17,18 +22,19 @@ check out the implementation of [VauEncryptionService](https://github.com/simon-
 
 ### In case of forking
 
-If you fork the projekt to work on a different JDK notice that you'll probably have to
-adjust the BouncyCastle dependency. There are [different versions](https://mvnrepository.com/search?q=org.bouncycastle%3Abcprov-jdk15on&ref=opensearch)
-depending on which JDK you're targeting.
+Notice that the BouncyCastle dependency requires a JVM >=1.8.
 
 ### History
 
-The initial code has been directly copied over from the [vau package of the E-Rezept-App-Android repository](https://github.com/gematik/E-Rezept-App-Android/tree/master/common/src/commonMain/kotlin/de/gematik/ti/erp/app/vau) 
+The code for package de.gematik.titus.erezept.vau has been copied over from the [vau package of the E-Rezept-App-Android repository](https://github.com/gematik/E-Rezept-App-Android/tree/master/common/src/commonMain/kotlin/de/gematik/ti/erp/app/vau) 
 which was written within german health data company [gematik GmbH](https://www.gematik.de/).
 The following classes/files are especially interesting:
 - [Crypto](https://github.com/gematik/E-Rezept-App-Android/blob/master/common/src/commonMain/kotlin/de/gematik/ti/erp/app/vau/Crypto.kt):
 contains the low level code to symmetrically en-/decrypt with AesGcm and asymmetrically en-/decrypt with Ecies.
 - [ClientCrypto](https://github.com/gematik/E-Rezept-App-Android/blob/master/common/src/commonMain/kotlin/de/gematik/ti/erp/app/vau/ClientCrypto.kt):
 contains the functionality for an HttpClient to handle its side of the VAU communication.
+
+The code for package de.gematik.ti.erp.app.vau has been saved to this project when it became apparent, that it wasn't needed
+in project [vau-terminating-proxy](https://gitlab.prod.ccs.gematik.solutions/git/erezept/rezeptor/vau-terminating-proxy).
 
 The vau code within the gematik's repository is explained in [this blog post](https://code.gematik.de/tech/2022/10/12/ecies-vau.html).
