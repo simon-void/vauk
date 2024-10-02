@@ -1,8 +1,5 @@
 package de.gematik.titus.erezept.vau
 
-import kotlin.collections.component1
-import kotlin.collections.component2
-import kotlin.collections.toList
 import kotlin.text.Charsets.UTF_8
 
 /**
