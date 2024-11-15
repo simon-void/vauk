@@ -1,11 +1,13 @@
-package de.gematik.titus.erezept.vau
+package de.gematik.titus.erezept.vauproxy.vau
 
+import de.gematik.titus.erezept.vauproxy.util.TraceId
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class L1VauReqEnvelopeAkaInnerVauTest {
     @Test
-    fun `test parse InnerHttpRequest from bytes`() {
+    fun `test parse L1VauReqEnvelopeAkaInnerVau from bytes`() {
         val body = """
              |<Parameters xmlns="http://hl7.org/fhir">
              |    <parameter>
@@ -31,23 +33,66 @@ class L1VauReqEnvelopeAkaInnerVauTest {
              |
         """.trimMargin().replace("\n", "\r\n") + body
 
-        val l1VauReq = L1VauReqEnvelopeAkaInnerVau.from(innerHttpRequestContent.toByteArray(Charsets.UTF_8))
+        val l1vauReqEnvelopInnerVau = L1VauReqEnvelopeAkaInnerVau.from(
+            innerHttpRequestContent.toByteArray(),
+            TraceId.next(),
+        )
 
-        assertEquals("POST", l1VauReq.method.name)
-        assertEquals("/Task/${'$'}create", l1VauReq.path)
-        assertEquals("HTTP/1.1", l1VauReq.httpVersion.value)
-        l1VauReq.headers.let { headers ->
-            assertEquals(8, headers.size, "headers found: ${headers.keys}")
-            assertEquals("application/fhir+xml", headers["content-type"]?.singleOrNull())
-            assertEquals("PostmanRuntime/7.29.3", headers["user-agent"]?.singleOrNull())
-            assertEquals("0dad21d7-bb31-49e4-820d-1a1dd6dd193e", headers["postman-token"]?.singleOrNull())
-            assertEquals("127.0.0.1:15081", headers["host"]?.singleOrNull())
-            assertEquals("keep-alive", headers["connection"]?.singleOrNull())
-            assertEquals("270", headers["content-length"]?.singleOrNull())
-            assertEquals("gzip, deflate, br", headers["accept-encoding"]?.joinToString(", "))
-            assertEquals("Bearer ey.JhbG.example", headers["authorization"]?.singleOrNull())
+        assertEquals("POST", l1vauReqEnvelopInnerVau.method.toString())
+        assertEquals("/Task/${'$'}create", l1vauReqEnvelopInnerVau.path)
+        assertEquals("HTTP/1.1", l1vauReqEnvelopInnerVau.httpVersion.value)
+        l1vauReqEnvelopInnerVau.headers.let { headers ->
+            val map = headers.asMapWithConcatenatedValues()
+            assertEquals(8, headers.size, "headers found: ${map.keys}")
+            assertEquals("application/fhir+xml", map["content-type"])
+            assertEquals("application/fhir+xml", headers.contentType)
+            assertEquals("PostmanRuntime/7.29.3", map["user-agent"])
+            assertEquals("0dad21d7-bb31-49e4-820d-1a1dd6dd193e", map["postman-token"])
+            assertEquals("127.0.0.1:15081", map["host"])
+            assertEquals("keep-alive", map["connection"])
+            assertEquals("270", map["content-length"])
+            assertEquals(270, headers.contentLength)
+            assertEquals("gzip, deflate, br", map["accept-encoding"])
+            assertEquals("Bearer ey.JhbG.example", map["authorization"])
         }
 
-        assertEquals(body, l1VauReq.body.toString())
+        assertEquals(body, l1vauReqEnvelopInnerVau.body.bytes.decodeToString())
+    }
+
+    @Test
+    fun `test toByteArray`() {
+        val path = "/somePath"
+        val body = "some Body"
+        val l1vauReq = L1VauReqEnvelopeAkaInnerVau(
+            method = HttpMethod.POST,
+            path = path,
+            httpVersion = HttpVersion.HTTP_1_1,
+            headers = mapOf(
+                "header1" to "value1",
+                "header2" to "value2a, value2b"
+            ).let { VauHeaders.fromConcatenatedHeaderValues(it) },
+            body = BodyBytes(body.toByteArray()),
+        )
+
+        assertFalse(l1vauReq.toByteArray().decodeToString().contains("\r\n\r\n\r\n"))
+
+        val (firstLine, headerLines: List<String>, bodyFound) = run {
+            val output = l1vauReq.toByteArray().decodeToString()
+            val firstLineAndHeaders = output.substringBefore("\r\n\r\n")
+            val body = output.substringAfter("\r\n\r\n")
+
+            val lineIter = firstLineAndHeaders.split("\r\n").iterator()
+
+            val firstLine = lineIter.next()
+            val headerLines = buildList<String> {
+                lineIter.forEach { add(it) }
+            }
+            Triple(firstLine, headerLines, body)
+        }
+
+        assertEquals("POST $path ${HttpVersion.HTTP_1_1.value}", firstLine)
+        assertEquals(body, bodyFound)
+        assert(headerLines.singleOrNull { it.startsWith("header1") } != null)
+        assert(headerLines.singleOrNull { it.startsWith("header2") } != null)
     }
 }

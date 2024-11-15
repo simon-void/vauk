@@ -1,6 +1,10 @@
+@file:OptIn(ExperimentalUnsignedTypes::class)
+
 package de.gematik.titus.erezept.vau
 
-import kotlin.text.Charsets.UTF_8
+import de.gematik.ti.erp.app.vau.TraceId
+import de.gematik.ti.erp.app.vau.getLogger
+import io.ktor.util.encodeBase64
 
 /**
  * A L1 inner http request looks like this:
@@ -30,56 +34,48 @@ class L1VauReqEnvelopeAkaInnerVau(
     val method: HttpMethod,
     val path: String,
     val httpVersion: HttpVersion,
-    val headers: Map<String, List<String>>,
-    val body: PlainBody,
+    val headers: VauHeaders,
+    val body: BodyBytes,
 ) {
+    private val preambleBytes: ByteArray
+        get() = VauMessage.concatenatePreambleBytes("$method $path ${httpVersion.value}", headers)
+
+    fun toByteArray(): ByteArray = preambleBytes + body.bytes
+
     override fun toString(): String = """
         |L1VauReqEnvelopeAkaInnerVau:
-        |$method $path $httpVersion
-        |${headers.entries.joinToString("\n") { (name, values) -> "$name: ${values.joinToString(", ")}" }}
-        |nrOfBodyBytes=${body.bytes.size}
+        |${preambleBytes.decodeToString()}bodyAsBase64: ${body.bytes.encodeBase64()}
     """.trimMargin()
 
     companion object {
-        private val bodySeparator = "\r\n\r\n".toByteArray()
+        private val log = getLogger<L1VauReqEnvelopeAkaInnerVau>()
 
-        fun from(bytes: ByteArray): L1VauReqEnvelopeAkaInnerVau {
-            val (preamble: String, body: PlainBody) = run {
-                val bodySplitIndex = bytes.indexOf(bodySeparator)
-                require(bodySplitIndex >= 0) { "Invalid InnerHttpRequest bytes: no body found" }
-                val preambleBytes = bytes.copyOf(bodySplitIndex)
-                val bodyBytes = bytes.copyOfRange(bodySplitIndex + bodySeparator.size, bytes.size)
-
-                preambleBytes.toString(UTF_8) to PlainBody(bytes = bodyBytes)
+        fun from(bytes: ByteArray, traceId: TraceId): L1VauReqEnvelopeAkaInnerVau {
+            val msg = try {
+                VauMessage.from(bytes)
+            } catch (e: Throwable) {
+                log.error("$traceId failed to parse vau message from decrypted bytes (as base64): " + bytes.encodeBase64())
+                throw IllegalArgumentException("couldn't parse vau message. Probably decryption failed.", e)
             }
 
-            val (firstLine: String, headerLines: Iterator<String>) = run {
-                val lines = preamble.split("\r\n").iterator()
-                require(lines.hasNext()) { "Invalid InnerHttpRequest preamble: no first line found" }
-                val firstLine = lines.next()
-                firstLine to lines
-            }
-
-            val (method: String, path: String, httpVersion: String) = run {
-                val parts = firstLine.split(" ")
-                require(parts.size == 3) { """Invalid InnerHttpRequest first line structure! Expected "[method] [path] [httpVersion] but was": $firstLine""" }
-                parts
-            }
-
-            val headers: Map<String, List<String>> = headerLines.asSequence()
-                .map { line ->
-                    val (name, values) = line.split(':', limit = 2)
-                    name.trim() to values.split(',').map { it.trim() }
+            val (method: HttpMethod, path: String, httpVersion: HttpVersion) = msg.firstLine.let {
+                runCatching {
+                    val parts = it.split(" ")
+                    require(parts.size == 3) { """Invalid InnerHttpRequest first line structure! Expected "[method] [path] [httpVersion] but was": $it""" }
+                    Triple(HttpMethod.parse(parts[0]), parts[1], HttpVersion.parse(parts[2]))
+                }.getOrElse { e ->
+                    log.error("""$traceId failed to parse "[method] [path] [httpVersion]" from first line of Vau message: "$it" because $e""")
+                    log.error("$traceId complete decrypted vau message (as base64): " + bytes.encodeBase64())
+                    throw e
                 }
-                .groupBy({ it.first }, { it.second })
-                .mapValues { it.value.flatten() }
+            }
 
             return L1VauReqEnvelopeAkaInnerVau(
-                method = HttpMethod.parse(method),
+                method = method,
                 path = path,
-                httpVersion = HttpVersion.parse(httpVersion),
-                headers = headers,
-                body = body,
+                httpVersion = httpVersion,
+                headers = msg.headers,
+                body = msg.body,
             )
         }
     }
@@ -110,7 +106,7 @@ class L1VauReqEnvelopeAkaInnerVau(
  */
 
 class L2VauReqEnvelopeAkaInnerVau(
-    val version: Int,
+    val version: Int = 1,
     val accessToken: AccessCode,
     val requestId: RequestId,
     val aesKey: AesKey,
@@ -120,25 +116,27 @@ class L2VauReqEnvelopeAkaInnerVau(
         require(version == 1) { "Invalid version: $version, supported version: 1" }
     }
 
+    private val preambleBytes: ByteArray
+        get() =
+            "$version ${accessToken.value} ${requestId.hexValue} ${aesKey.hexValue} ".toByteArray()
+
+    fun toByteArray(): ByteArray = preambleBytes + l1InnerVau.toByteArray()
+
     override fun toString(): String = """
         |L2VauReqEnvelopeAkaInnerVau:
-        |$version $accessToken $requestId $aesKey $l1InnerVau
+        |${preambleBytes.decodeToString()} $l1InnerVau
     """.trimMargin()
 
     companion object {
-        fun from(bytes: ByteArray): L2VauReqEnvelopeAkaInnerVau {
-            val spaceByte = ' '.code.toByte()
-            val space1Pos = bytes.indexOf(spaceByte, 0).assertIndexFound()
-            val space2Pos = bytes.indexOf(spaceByte, space1Pos+1).assertIndexFound()
-            val space3Pos = bytes.indexOf(spaceByte, space2Pos+1).assertIndexFound()
-            val space4Pos = bytes.indexOf(spaceByte, space3Pos+1).assertIndexFound()
+        fun from(bytes: ByteArray, traceId: TraceId): L2VauReqEnvelopeAkaInnerVau {
+            val (tokens, restBytes) = bytes.splitOfTokens(4)
 
-            val version = bytes.copyOf(space1Pos).decodeToString().toInt()
-            val accessToken = AccessCode(bytes.copyOfRange(space1Pos+1, space2Pos).decodeToString())
-            val requestId = RequestId(bytes.copyOfRange(space2Pos+1, space3Pos).decodeToString())
-            val aesKey = AesKey(bytes.copyOfRange(space3Pos+1, space4Pos).decodeToString())
+            val version = tokens[0].toInt()
+            val accessToken = AccessCode(tokens[1])
+            val requestId = RequestId(tokens[2])
+            val aesKey = AesKey(tokens[3])
 
-            val l1InnerVau = L1VauReqEnvelopeAkaInnerVau.from(bytes.copyOfRange(space4Pos+1, bytes.size))
+            val l1InnerVau = L1VauReqEnvelopeAkaInnerVau.from(restBytes, traceId)
 
             return L2VauReqEnvelopeAkaInnerVau(
                 version = version,
@@ -154,48 +152,32 @@ class L2VauReqEnvelopeAkaInnerVau(
 @JvmInline
 value class L3VauReqEnvelopeAkaEncryptedL2(val bytes: ByteArray) {
     override fun toString(): String = "L3VauReqEnvelopeAkaEncryptedL2(nrOfBytes=${bytes.size})"
+
+    val iV: InitialisationVector get() = InitialisationVector(bytes.copyOf(12).toUByteArray())
+    val taggedCipherText: ByteArray get() = bytes.copyOfRange(12, bytes.size)
 }
 
+@ExperimentalUnsignedTypes
 class L4VauReqEnvelopeAkaOuterVau(
-    version: L4Version,
-    val xCoordinate: XCoordinate,
-    val yCoordinate: YCoordinate,
-    val iV: InitialisationVector,
-    val l3EncryptedL2: L3VauReqEnvelopeAkaEncryptedL2,
+    val bytes: ByteArray,
 ) {
+    val version: L4Version = L4Version(bytes[0].toUByte())
+
     init {
         version.assertIsValid()
     }
 
-    override fun toString(): String = "L4VauReqEnvelopeAkaOuterVau(nrOfEncryptingBytes=${l3EncryptedL2.bytes.size})"
-
-    companion object {
-        @OptIn(ExperimentalUnsignedTypes::class)
-        fun from(bytes: ByteArray): L4VauReqEnvelopeAkaOuterVau {
-            val version = bytes.copyOf(2)
-            val xCoordinate = bytes.copyOfRange(2, 34)
-            val yCoordinate = bytes.copyOfRange(34, 66)
-            val iV = bytes.copyOfRange(66, 78)
-            val l3EncryptedL2 = L3VauReqEnvelopeAkaEncryptedL2(bytes.copyOfRange(78, bytes.size))
-
-            return L4VauReqEnvelopeAkaOuterVau(
-                version = L4Version(version),
-                xCoordinate = XCoordinate(xCoordinate.toUByteArray()),
-                yCoordinate = YCoordinate(yCoordinate.toUByteArray()),
-                iV = InitialisationVector(iV.toUByteArray()),
-                l3EncryptedL2 = l3EncryptedL2,
+    val xCoordinate: XCoordinate get() = XCoordinate(bytes.copyOfRange(1, 33).toUByteArray())
+    val yCoordinate: YCoordinate get() = YCoordinate(bytes.copyOfRange(33, 65).toUByteArray())
+    val l3EncryptedL2: L3VauReqEnvelopeAkaEncryptedL2
+        get() = L3VauReqEnvelopeAkaEncryptedL2(
+            bytes.copyOfRange(
+                65,
+                bytes.size
             )
-        }
-    }
-}
+        )
 
-@JvmInline
-value class PlainBody(val bytes: ByteArray) {
-    override fun toString(): String = bytes.decodeToString()
-
-    companion object {
-        fun fromUtf8(value: String): PlainBody = PlainBody(bytes = value.encodeToByteArray())
-    }
+    override fun toString(): String = "L4VauReqEnvelopeAkaOuterVau(nrBytes=${bytes.size})"
 }
 
 @JvmInline
@@ -205,60 +187,59 @@ value class AccessCode(val value: String) {
     }
 }
 
-private val hexRegex = Regex("[0-9a-fA-F]+")
+private val hexRegex = Regex("[0-9a-f]+") // by spec only lowercase
 private fun String.assertIsHexEncoded(paramName: String) {
-    require(this.matches(hexRegex)) { "param $paramName is not hex encoded: $this" }
+    require(this.matches(hexRegex)) { "param $paramName is not lowercase hex encoded: $this" }
 }
 
 @JvmInline
-value class RequestId(val value: String) {
+value class RequestId(val hexValue: String) {
     init {
-        value.assertIsHexEncoded("requestId")
+        hexValue.assertIsHexEncoded("requestId")
     }
 }
 
 @JvmInline
-value class AesKey(val value: String) {
+value class AesKey(val hexValue: String) {
     init {
-        value.assertIsHexEncoded("aesKey")
-        require(value.length == 32) { "Invalid aes key length: ${value.length}, expected 32" }
+        hexValue.assertIsHexEncoded("aesKey") // needs to be lowercase because that's what `hexToUByteArray()` expects
+        require(hexValue.length == 32) { "Invalid aes key length: ${hexValue.length}, expected 32" }
     }
 
-
-    @OptIn(ExperimentalStdlibApi::class, ExperimentalUnsignedTypes::class)
-    fun toUByteArray(): UByteArray = value.hexToUByteArray()
+    @ExperimentalStdlibApi
+    fun asBytes(): ByteArray = hexValue.hexToByteArray()
 }
 
 @JvmInline
-value class L4Version(val value: ByteArray) {
+value class L4Version(val value: UByte) {
     fun assertIsValid() {
-        require(value.size == 2) { "Invalid version size: ${value.size}, expected 2" }
-        require(value.map { "$it" }.joinToString(separator = "") == "01") {
-            "Invalid version: ${value.toList()}, expected [0, 1]"
+        require(value.toInt() == 1) {
+            "Invalid version: $value, expected 1"
         }
     }
 
     companion object {
-        val V01 = L4Version(byteArrayOf(0, 1))
+        val V1 = L4Version(1.toUByte())
     }
 }
 
+@ExperimentalUnsignedTypes
 @JvmInline
-@OptIn(ExperimentalUnsignedTypes::class)
 value class XCoordinate(val uBytes: UByteArray) {
     init {
         require(uBytes.size == 32) { "Invalid byte array size: ${uBytes.size}, expected 32" }
     }
 }
 
+@ExperimentalUnsignedTypes
 @JvmInline
-@OptIn(ExperimentalUnsignedTypes::class)
 value class YCoordinate(val uBytes: UByteArray) {
     init {
         require(uBytes.size == 32) { "Invalid byte array size: ${uBytes.size}, expected 32" }
     }
 }
 
+@ExperimentalUnsignedTypes
 @JvmInline
 value class InitialisationVector(val uBytes: UByteArray) {
     init {
@@ -266,33 +247,33 @@ value class InitialisationVector(val uBytes: UByteArray) {
     }
 }
 
-fun ByteArray.indexOf(sequence: ByteArray, startFrom: Int = 0): Int {
-    if(sequence.isEmpty()) throw IllegalArgumentException("non-empty byte sequence is required")
-    if(startFrom < 0 ) throw IllegalArgumentException("startFrom must be non-negative")
-    var matchOffset = 0
-    var start = startFrom
-    var offset = startFrom
-    while( offset < size ) {
-        if( this[offset] == sequence[matchOffset]) {
-            if( matchOffset++ == 0 ) start = offset
-            if( matchOffset == sequence.size ) return start
+enum class HttpMethod {
+    GET, POST, DELETE;
+
+    override fun toString(): String = name
+
+    companion object {
+        fun parse(method: String): HttpMethod = method.uppercase().let { upMethod ->
+            entries.firstOrNull() { it.name == upMethod }
+                ?: error("Unknown method: $upMethod (known methods: ${entries.joinToString(", ")})")
         }
-        else
-            matchOffset = 0
-        offset++
     }
-    return -1
 }
 
-fun ByteArray.indexOf(byte: Byte, startFrom: Int = 0): Int {
-    if(startFrom < 0 ) throw IllegalArgumentException("startFrom must be non-negative")
-    for(i in startFrom until size) {
-        if( this[i] == byte ) return i
-    }
-    return -1
-}
+enum class HttpVersion(val value: String) {
+    HTTP_1_1("HTTP/1.1");
 
-fun Int.assertIndexFound(): Int {
-    require(this != -1) { "index not found" }
-    return this
+    override fun toString(): String = name
+
+    companion object {
+        fun parse(version: String): HttpVersion = version.uppercase().let { upVersion ->
+            HttpVersion.entries.firstOrNull() { it.value == upVersion } ?: error(
+                "Unknown http protocol version: $upVersion (known versions: ${
+                    HttpVersion.entries.joinToString(
+                        ", "
+                    )
+                })"
+            )
+        }
+    }
 }

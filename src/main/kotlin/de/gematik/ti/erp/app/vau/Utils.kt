@@ -18,6 +18,8 @@
 
 package de.gematik.ti.erp.app.vau
 
+import kotlin.random.Random
+
 
 @JvmInline
 value class BinarySize(val nrOfBytes: Int) {
@@ -78,4 +80,21 @@ fun ByteArray.contains(other: ByteArray): Boolean {
         }
     }
     return false
+}
+
+inline fun <reified T> getLogger(): Logger = T::class.let { clazz ->
+    clazz.simpleName?.let { KtorSimpleLogger(it) } ?: error("Couldn't get simple name for class " + clazz.getFullName())
+}
+
+
+@JvmInline
+value class TraceId(private val value: Int) {
+    override fun toString(): String = "(traceId: $value)"
+
+    companion object {
+        private val random = Random(System.currentTimeMillis())
+        // since this is a concurrent function, let's generate a random traceId to allow request tracing
+        // 5 digits should make collisions unlikely enough
+        fun next() = TraceId(random.nextInt(from = 10_000, until = 100_000))
+    }
 }
