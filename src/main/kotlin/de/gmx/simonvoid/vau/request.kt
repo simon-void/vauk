@@ -1,10 +1,11 @@
 @file:OptIn(ExperimentalUnsignedTypes::class)
 
-package de.gematik.titus.erezept.vau
+package de.gmx.simonvoid.vau
 
-import de.gematik.ti.erp.app.vau.TraceId
-import de.gematik.ti.erp.app.vau.getLogger
-import io.ktor.util.encodeBase64
+import de.gmx.simonvoid.util.TraceId
+import de.gmx.simonvoid.util.encodeBase64
+import de.gmx.simonvoid.util.getLogger
+import org.apache.commons.codec.binary.Hex
 
 /**
  * A L1 inner http request looks like this:
@@ -50,6 +51,15 @@ class L1VauReqEnvelopeAkaInnerVau(
     companion object {
         private val log = getLogger<L1VauReqEnvelopeAkaInnerVau>()
 
+        private val lowercaseHeaderNamesToDrop = listOf("host")
+        fun filterHeaders(headers: Map<String, List<String>>):Map<String, List<String>> = buildMap(headers.size) {
+            headers.forEach { name, values ->
+                if (name.lowercase() !in lowercaseHeaderNamesToDrop) {
+                    put(name, values)
+                }
+            }
+        }
+
         fun from(bytes: ByteArray, traceId: TraceId): L1VauReqEnvelopeAkaInnerVau {
             val msg = try {
                 VauMessage.from(bytes)
@@ -66,15 +76,19 @@ class L1VauReqEnvelopeAkaInnerVau(
                 }.getOrElse { e ->
                     log.error("""$traceId failed to parse "[method] [path] [httpVersion]" from first line of Vau message: "$it" because $e""")
                     log.error("$traceId complete decrypted vau message (as base64): " + bytes.encodeBase64())
-                    throw e
+                    throw IllegalArgumentException("not valid L1VauReqEnvelope data", e)
                 }
             }
+
+            val filteredHeaders = VauHeaders.fromSeparateHeaderValues(
+                filterHeaders(msg.headers.asMapWithListOfValues())
+            )
 
             return L1VauReqEnvelopeAkaInnerVau(
                 method = method,
                 path = path,
                 httpVersion = httpVersion,
-                headers = msg.headers,
+                headers = filteredHeaders,
                 body = msg.body,
             )
         }
@@ -150,34 +164,35 @@ class L2VauReqEnvelopeAkaInnerVau(
 }
 
 @JvmInline
-value class L3VauReqEnvelopeAkaEncryptedL2(val bytes: ByteArray) {
-    override fun toString(): String = "L3VauReqEnvelopeAkaEncryptedL2(nrOfBytes=${bytes.size})"
+value class Cipher(val bytes: ByteArray) {
+    override fun toString(): String = "Cipher(nrOfBytes=${bytes.size})"
 
-    val iV: InitialisationVector get() = InitialisationVector(bytes.copyOf(12).toUByteArray())
+    // initialisation Vector
+    val iV: InitialisationVector get() = InitialisationVector(bytes.copyOf(12))
     val taggedCipherText: ByteArray get() = bytes.copyOfRange(12, bytes.size)
 }
 
 @ExperimentalUnsignedTypes
-class L4VauReqEnvelopeAkaOuterVau(
+class L3VauReqEnvelopeAkaOuterVau(
     val bytes: ByteArray,
 ) {
-    val version: L4Version = L4Version(bytes[0].toUByte())
+    val version: VauVersion = VauVersion(bytes[0])
 
     init {
         version.assertIsValid()
     }
 
-    val xCoordinate: XCoordinate get() = XCoordinate(bytes.copyOfRange(1, 33).toUByteArray())
-    val yCoordinate: YCoordinate get() = YCoordinate(bytes.copyOfRange(33, 65).toUByteArray())
-    val l3EncryptedL2: L3VauReqEnvelopeAkaEncryptedL2
-        get() = L3VauReqEnvelopeAkaEncryptedL2(
+    val xCoordinate: XCoordinate get() = XCoordinate(bytes.copyOfRange(1, 33))
+    val yCoordinate: YCoordinate get() = YCoordinate(bytes.copyOfRange(33, 65))
+    val cipher: Cipher
+        get() = Cipher(
             bytes.copyOfRange(
                 65,
                 bytes.size
             )
         )
 
-    override fun toString(): String = "L4VauReqEnvelopeAkaOuterVau(nrBytes=${bytes.size})"
+    override fun toString(): String = "L3VauReqEnvelopeAkaOuterVau(nrBytes=${bytes.size})"
 }
 
 @JvmInline
@@ -187,7 +202,7 @@ value class AccessCode(val value: String) {
     }
 }
 
-private val hexRegex = Regex("[0-9a-f]+") // by spec only lowercase
+private val hexRegex: Regex = "[0-9a-f]+".toRegex() // by spec only lowercase
 private fun String.assertIsHexEncoded(paramName: String) {
     require(this.matches(hexRegex)) { "param $paramName is not lowercase hex encoded: $this" }
 }
@@ -202,16 +217,15 @@ value class RequestId(val hexValue: String) {
 @JvmInline
 value class AesKey(val hexValue: String) {
     init {
-        hexValue.assertIsHexEncoded("aesKey") // needs to be lowercase because that's what `hexToUByteArray()` expects
+        hexValue.assertIsHexEncoded("aesKey")
         require(hexValue.length == 32) { "Invalid aes key length: ${hexValue.length}, expected 32" }
     }
 
-    @ExperimentalStdlibApi
-    fun asBytes(): ByteArray = hexValue.hexToByteArray()
+    fun asBytes(): ByteArray = Hex.decodeHex(hexValue)
 }
 
 @JvmInline
-value class L4Version(val value: UByte) {
+value class VauVersion(val value: Byte) {
     fun assertIsValid() {
         require(value.toInt() == 1) {
             "Invalid version: $value, expected 1"
@@ -219,31 +233,31 @@ value class L4Version(val value: UByte) {
     }
 
     companion object {
-        val V1 = L4Version(1.toUByte())
+        val V1 = VauVersion(0xb)
     }
 }
 
 @ExperimentalUnsignedTypes
 @JvmInline
-value class XCoordinate(val uBytes: UByteArray) {
+value class XCoordinate(val bytes: ByteArray) {
     init {
-        require(uBytes.size == 32) { "Invalid byte array size: ${uBytes.size}, expected 32" }
+        require(bytes.size == 32) { "Invalid byte array size: ${bytes.size}, expected 32" }
     }
 }
 
 @ExperimentalUnsignedTypes
 @JvmInline
-value class YCoordinate(val uBytes: UByteArray) {
+value class YCoordinate(val bytes: ByteArray) {
     init {
-        require(uBytes.size == 32) { "Invalid byte array size: ${uBytes.size}, expected 32" }
+        require(bytes.size == 32) { "Invalid byte array size: ${bytes.size}, expected 32" }
     }
 }
 
 @ExperimentalUnsignedTypes
 @JvmInline
-value class InitialisationVector(val uBytes: UByteArray) {
+value class InitialisationVector(val bytes: ByteArray) {
     init {
-        require(uBytes.size == 12) { "Invalid byte array size: ${uBytes.size}, expected 12" }
+        require(bytes.size == 12) { "Invalid byte array size: ${bytes.size}, expected 12" }
     }
 }
 

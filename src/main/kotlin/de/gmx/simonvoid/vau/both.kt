@@ -1,31 +1,31 @@
-package de.gematik.titus.erezept.vau
+package de.gmx.simonvoid.vau
 
 import kotlin.text.Charsets.UTF_8
 
-data class VauMessage(
+internal data class VauMessage(
     val firstLine: String,
     val headers: VauHeaders,
     val body: BodyBytes,
 ) {
     companion object {
-        private const val bodySeparator = "\r\n\r\n"
-        private const val lineSeparator = "\r\n"
+        private const val BODY_SEPARATOR = "\r\n\r\n"
+        private const val LINE_SEPARATOR = "\r\n"
 
         fun from(bytes: ByteArray): VauMessage {
             val (preamble: String, body: BodyBytes) = run {
-                val bodySplitIndex = bytes.indexOf(bodySeparator.toByteArray())
+                val bodySplitIndex = bytes.indexOf(BODY_SEPARATOR.toByteArray())
                 if(bodySplitIndex==-1) {
                     bytes.decodeToString() to BodyBytes.EMPTY
                 } else {
                     val preambleBytes = bytes.copyOf(bodySplitIndex)
-                    val bodyBytes = bytes.copyOfRange(bodySplitIndex + bodySeparator.length, bytes.size)
+                    val bodyBytes = bytes.copyOfRange(bodySplitIndex + BODY_SEPARATOR.length, bytes.size)
 
                     preambleBytes.toString(UTF_8) to BodyBytes(bytes = bodyBytes)
                 }
             }
 
             val (firstLine: String, headerLines: Iterator<String>) = run {
-                val lines = preamble.split(lineSeparator).iterator()
+                val lines = preamble.split(LINE_SEPARATOR).iterator()
                 require(lines.hasNext()) { "Invalid InnerHttpRequest preamble: no first line found" }
                 val firstLine = lines.next()
                 require(!firstLine.contains('\n')) {
@@ -46,13 +46,13 @@ data class VauMessage(
 
         fun concatenatePreambleBytes(firstLine: String, headers: VauHeaders): ByteArray = buildString {
             append(firstLine)
-            headers.asMapWithConcatenatedValues().entries.forEach { (name, values) -> append("$lineSeparator$name: $values") }
-            append(bodySeparator)
+            headers.asMapWithConcatenatedValues().entries.forEach { (name, values) -> append("$LINE_SEPARATOR$name: $values") }
+            append(BODY_SEPARATOR)
         }.toByteArray()
     }
 }
 
-fun ByteArray.splitOfTokens(nrOfTokens: Int): Pair<List<String>, ByteArray> {
+internal fun ByteArray.splitOfTokens(nrOfTokens: Int): Pair<List<String>, ByteArray> {
     require(nrOfTokens>0) {"nrOfTokens must be >=1 but was: $nrOfTokens"}
     val bytes = this
     val spaceByte = ' '.code.toByte()
@@ -98,9 +98,9 @@ value class VauHeaders private constructor(private val map: Map<String, List<Str
                 key,
                 ignoreCase = true
             )
-        }?.value?.singleOrNull()?.trim()
+        }?.value?.first{it.startsWith("application/") || it.startsWith("text/")}?.trim()
     val jwt: String?
-        get() = map.entries.firstOrNull { (key, _) ->
+        get() = map.entries.singleOrNull { (key, _) ->
             "authorization".equals(
                 key,
                 ignoreCase = true
@@ -131,40 +131,24 @@ value class VauHeaders private constructor(private val map: Map<String, List<Str
     companion object {
         fun fromConcatenatedHeaderValues(
             map: Map<String, String>,
-            splitStrategy: HeaderValueSplitStrategy = defaultValueSplittingStrategy
         ): VauHeaders = VauHeaders(
-            map.mapValues { (key, joinedValues) -> splitStrategy.splitValues(key, joinedValues) }
+            map.mapValues { (_, possiblyConcatenatedValues) -> listOf(possiblyConcatenatedValues) }
         )
 
         fun fromSeparateHeaderValues(map: Map<String, List<String>>): VauHeaders = VauHeaders(map)
 
-        // splitting/joining header values can be non-trivial, see https://stackoverflow.com/a/38406581
-        val defaultValueConcatenationStrategy = HeaderValueConcatenationStrategy { key, values ->
-            if (!values.any { it.contains(',') }) {
-                values.joinToString(separator = ", ")
-            } else {
-                values.joinToString(separator = "; ")
-            }
-        }
-        val defaultValueSplittingStrategy = HeaderValueSplitStrategy { key, joinedValues ->
-            when {
-                joinedValues.contains(';') -> joinedValues.split(';').map { it.trim() }
-                joinedValues.contains(',') -> joinedValues.split(',').map { it.trim() }
-                else -> listOf(joinedValues)
-            }
+        // joining header values can be non-trivial, because (only) Set-Cookie Header uses ',' in values
+        val defaultValueConcatenationStrategy = HeaderValueConcatenationStrategy { _, values ->
+            values.joinToString(separator = ", ")
         }
     }
 
     fun interface HeaderValueConcatenationStrategy {
         fun concatenateValues(key: String, values: List<String>): String
     }
-
-    fun interface HeaderValueSplitStrategy {
-        fun splitValues(key: String, concatenatedValues: String): List<String>
-    }
 }
 
-fun Int.assertIndexFound(): Int {
+internal fun Int.assertIndexFound(): Int {
     require(this != -1) { "index not found" }
     return this
 }
