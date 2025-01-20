@@ -65,6 +65,8 @@ class L1VauResEnvelope(
     }
 }
 
+data class StatusCode(val code: Int, val text: String)
+
 
 /*
  * A Level 2 Vau Response Envelope looks like this:
@@ -111,5 +113,3 @@ class L2VauResEnvelope(
 value class L3VauResEnvelopeAkaEncryptedL2(val bytes: ByteArray) {
     override fun toString(): String = "L3VauResEnvelopeAkaEncryptedL2(nrOfBytes=${bytes.size})"
 }
-
-data class StatusCode(val code: Int, val text: String)

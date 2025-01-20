@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalUnsignedTypes::class)
-
 package de.gmx.simonvoid.vau
 
 import de.gmx.simonvoid.util.TraceId
@@ -161,16 +159,6 @@ class L2VauReqEnvelopeAkaInnerVau(
     }
 }
 
-@JvmInline
-value class Cipher(val bytes: ByteArray) {
-    override fun toString(): String = "Cipher(nrOfBytes=${bytes.size})"
-
-    // initialisation Vector
-    val iV: InitialisationVector get() = InitialisationVector(bytes.copyOf(12))
-    val taggedCipherText: ByteArray get() = bytes.copyOfRange(12, bytes.size)
-}
-
-@ExperimentalUnsignedTypes
 class L3VauReqEnvelopeAkaOuterVau(
     val bytes: ByteArray,
 ) {
@@ -193,71 +181,7 @@ class L3VauReqEnvelopeAkaOuterVau(
     override fun toString(): String = "L3VauReqEnvelopeAkaOuterVau(nrBytes=${bytes.size})"
 }
 
-@JvmInline
-value class AccessCode(val value: String) {
-    init {
-        require(value.isNotBlank()) { "accessCode must not be blank" }
-    }
-}
-
-private val hexRegex: Regex = "[0-9a-f]+".toRegex() // by spec only lowercase
-private fun String.assertIsHexEncoded(paramName: String) {
-    require(this.matches(hexRegex)) { "param $paramName is not lowercase hex encoded: $this" }
-}
-
-@JvmInline
-value class RequestId(val hexValue: String) {
-    init {
-        hexValue.assertIsHexEncoded("requestId")
-    }
-}
-
-@JvmInline
-value class AesKey(val hexValue: String) {
-    init {
-        hexValue.assertIsHexEncoded("aesKey")
-        require(hexValue.length == 32) { "Invalid aes key length: ${hexValue.length}, expected 32" }
-    }
-
-    fun asBytes(): ByteArray = Hex.decodeHex(hexValue)
-}
-
-@JvmInline
-value class VauVersion(val value: Byte) {
-    fun assertIsValid() {
-        require(value.toInt() == 1) {
-            "Invalid version: $value, expected 1"
-        }
-    }
-
-    companion object {
-        val V1 = VauVersion(0xb)
-    }
-}
-
-@ExperimentalUnsignedTypes
-@JvmInline
-value class XCoordinate(val bytes: ByteArray) {
-    init {
-        require(bytes.size == 32) { "Invalid byte array size: ${bytes.size}, expected 32" }
-    }
-}
-
-@ExperimentalUnsignedTypes
-@JvmInline
-value class YCoordinate(val bytes: ByteArray) {
-    init {
-        require(bytes.size == 32) { "Invalid byte array size: ${bytes.size}, expected 32" }
-    }
-}
-
-@ExperimentalUnsignedTypes
-@JvmInline
-value class InitialisationVector(val bytes: ByteArray) {
-    init {
-        require(bytes.size == 12) { "Invalid byte array size: ${bytes.size}, expected 12" }
-    }
-}
+// helper classes for L1VauReqEnvelopeAkaInnerVau
 
 enum class HttpMethod {
     GET, POST, DELETE;
@@ -272,20 +196,66 @@ enum class HttpMethod {
     }
 }
 
-enum class HttpVersion(val value: String) {
-    HTTP_1_1("HTTP/1.1");
+// helper classes for L2VauReqEnvelopeAkaInnerVau
 
-    override fun toString(): String = name
+@JvmInline
+value class AccessCode(val value: String) {
+    init {
+        require(value.isNotBlank()) { "accessCode must not be blank" }
+    }
+}
+
+@JvmInline
+value class AesKey(val hexValue: String) {
+    init {
+        hexValue.assertIsHexEncoded("aesKey")
+        require(hexValue.length == 32) { "Invalid aes key length: ${hexValue.length}, expected 32" }
+    }
+
+    fun asBytes(): ByteArray = Hex.decodeHex(hexValue)
+}
+
+// helper classes for L3VauReqEnvelopeAkaOuterVau
+
+@JvmInline
+value class VauVersion(val value: Byte) {
+    fun assertIsValid() {
+        require(value.toInt() == 1) {
+            "Invalid version: $value, expected 1"
+        }
+    }
 
     companion object {
-        fun parse(version: String): HttpVersion = version.uppercase().let { upVersion ->
-            HttpVersion.entries.firstOrNull() { it.value == upVersion } ?: error(
-                "Unknown http protocol version: $upVersion (known versions: ${
-                    HttpVersion.entries.joinToString(
-                        ", "
-                    )
-                })"
-            )
-        }
+        val V1 = VauVersion(0x1)
+    }
+}
+
+@JvmInline
+value class XCoordinate(val bytes: ByteArray) {
+    init {
+        require(bytes.size == 32) { "Invalid byte array size: ${bytes.size}, expected 32" }
+    }
+}
+
+@JvmInline
+value class YCoordinate(val bytes: ByteArray) {
+    init {
+        require(bytes.size == 32) { "Invalid byte array size: ${bytes.size}, expected 32" }
+    }
+}
+
+@JvmInline
+value class Cipher(val bytes: ByteArray) {
+    override fun toString(): String = "Cipher(nrOfBytes=${bytes.size})"
+
+    // initialisation Vector
+    val iV: InitialisationVector get() = InitialisationVector(bytes.copyOf(12))
+    val taggedCipherText: ByteArray get() = bytes.copyOfRange(12, bytes.size)
+}
+
+@JvmInline
+value class InitialisationVector(val bytes: ByteArray) {
+    init {
+        require(bytes.size == 12) { "Invalid byte array size: ${bytes.size}, expected 12" }
     }
 }

@@ -2,6 +2,8 @@ package de.gmx.simonvoid.vau
 
 import kotlin.text.Charsets.UTF_8
 
+// level 1 support classes
+
 internal data class VauMessage(
     val firstLine: String,
     val headers: VauHeaders,
@@ -49,6 +51,24 @@ internal data class VauMessage(
             headers.asMapWithConcatenatedValues().entries.forEach { (name, values) -> append("$LINE_SEPARATOR$name: $values") }
             append(BODY_SEPARATOR)
         }.toByteArray()
+    }
+}
+
+enum class HttpVersion(val value: String) {
+    HTTP_1_1("HTTP/1.1");
+
+    override fun toString(): String = name
+
+    companion object {
+        fun parse(version: String): HttpVersion = version.uppercase().let { upVersion ->
+            HttpVersion.entries.firstOrNull() { it.value == upVersion } ?: error(
+                "Unknown http protocol version: $upVersion (known versions: ${
+                    HttpVersion.entries.joinToString(
+                        ", "
+                    )
+                })"
+            )
+        }
     }
 }
 
@@ -177,4 +197,18 @@ private fun ByteArray.indexOf(byte: Byte, startFrom: Int = 0): Int {
         if( this[i] == byte ) return i
     }
     return -1
+}
+
+// level 2 support classes
+
+private val hexRegex: Regex = "[0-9a-f]+".toRegex() // by spec only lowercase is allowed
+internal fun String.assertIsHexEncoded(paramName: String) {
+    require(this.matches(hexRegex)) { "param $paramName is not lowercase hex encoded: $this" }
+}
+
+@JvmInline
+value class RequestId(val hexValue: String) {
+    init {
+        hexValue.assertIsHexEncoded("requestId")
+    }
 }
